@@ -1,102 +1,3 @@
-'''import os
-import cv2
-import numpy as np
-import base64
-from flask import Flask, request, jsonify
-from keras_facenet import FaceNet
-from mtcnn.mtcnn import MTCNN
-import pickle
-from pymongo import MongoClient
-
-# Connect to MongoDB
-client = MongoClient('mongodb+srv://vinayvidhehi:leThisproject%40SR71bb@base64facedata.vac5pwx.mongodb.net/')
-db = client['ams']
-collection = db['studentlogins']
-
-
-# Initialize the Flask application
-app = Flask(__name__)
-
-# Initialize FaceNet and MTCNN
-embedder = FaceNet()
-detector = MTCNN()
-
-# Define the path to the SVM model file
-svm_model_file = 'svm_model.joblib'
-
-# Check if the SVM model file exists
-if not os.path.exists(svm_model_file):
-    raise FileNotFoundError(f"SVM model file '{svm_model_file}' not found")
-
-
-with open('svm_model.pkl', 'rb') as f:
-    svm_model = pickle.load(f)
-
-# Load the embeddings and labels
-data = np.load('faces_embeddings_done_classes.npz')
-EMBEDDED_X = data['arr_0']
-Y = data['arr_1']
-
-# Label encoding
-from sklearn.preprocessing import LabelEncoder
-encoder = LabelEncoder()
-encoder.fit(Y)
-Y = encoder.transform(Y)
-
-def get_embedding(face_img):
-    face_img = face_img.astype('float32')
-    face_img = np.expand_dims(face_img, axis=0)
-    
-    yhat = embedder.embeddings(face_img)
-    return yhat[0]
-
-# Endpoint for face recognition
-@app.route('/predict', methods=['POST'])
-def predict():
-    data = request.json
-    if 'image' not in data:
-        return jsonify({'error': 'No image provided'}), 400
-    
-    # Decode base64 image
-    image_data = base64.b64decode(data['image'])
-    image = np.frombuffer(image_data, np.uint8)
-    image = cv2.imdecode(image, cv2.IMREAD_COLOR)
-    
-    # Detect face
-    results = detector.detect_faces(image)
-    if not results:
-        return jsonify({'error': 'No face detected'}), 400
-    
-    # Process each detected face
-    predictions = []
-    for result in results:
-        x1, y1, w, h = result['box']
-        x1, y1 = abs(x1), abs(y1)
-        x2, y2 = x1 + w, y1 + h
-        face = image[y1:y2, x1:x2]
-        face = cv2.resize(face, (160, 160))
-        
-        # Get embedding
-        embedding = get_embedding(face)
-        
-        # Predict label
-        prediction = svm_model.predict([embedding])
-        label = encoder.inverse_transform(prediction)[0]
-        user =  collection.find_one({"student_id": label})
-        
-        print(user)
-        print(label)
-        label = {
-            "name":user.name
-        }
-        predictions.append(label)
-    
-    return jsonify(predictions), 200
-
-if __name__ == '__main__':
-    app.run(debug=True)
-'''
-
 import os
 import cv2
 from flask_cors import CORS
@@ -106,9 +7,7 @@ from flask import Flask, request, jsonify
 from keras_facenet import FaceNet
 from mtcnn.mtcnn import MTCNN
 import pickle
-from pymongo import MongoClient
 from sklearn.preprocessing import LabelEncoder
-
 
 # Initialize the Flask application
 app = Flask(__name__)
@@ -117,6 +16,8 @@ CORS(app)
 # Initialize FaceNet and MTCNN
 embedder = FaceNet()
 detector = MTCNN()
+#encoder = LabelEncoder()
+
 
 # Define the path to the SVM model file
 svm_model_file = 'svm_model.pkl'
@@ -128,24 +29,15 @@ if not os.path.exists(svm_model_file):
 with open(svm_model_file, 'rb') as f:
     svm_model = pickle.load(f)
 
-# Load the embeddings and labels
-data = np.load('faces_embeddings_done_classes.npz')
-EMBEDDED_X = data['arr_0']
-Y = data['arr_1']
-
-# Label encoding
-encoder = LabelEncoder()
-encoder.fit(Y)
-Y = encoder.transform(Y)
+# In-memory storage for image chunks
+from collections import defaultdict
+image_chunks = defaultdict(list)
 
 def get_embedding(face_img):
     face_img = face_img.astype('float32')
     face_img = np.expand_dims(face_img, axis=0)
     yhat = embedder.embeddings(face_img)
     return yhat[0]
-
-# In-memory storage for image chunks
-image_chunks = {}
 
 # Endpoint for face recognition
 @app.route('/predict', methods=['POST'])
@@ -157,15 +49,15 @@ def predict():
     is_last_chunk = data.get('isLastChunk')
 
     if email not in image_chunks:
-        image_chunks[email] = ""
+        image_chunks[email] = []
 
-    image_chunks[email] += chunk
+    image_chunks[email].append(chunk)
 
     if not is_last_chunk:
         return jsonify({"key": 1}), 200
 
     # Combine chunks and process the complete image
-    image_base64 = image_chunks.pop(email)
+    image_base64 = ''.join(image_chunks.pop(email))
     image_data = base64.b64decode(image_base64)
     image = np.frombuffer(image_data, np.uint8)
     image = cv2.imdecode(image, cv2.IMREAD_COLOR)
@@ -189,13 +81,12 @@ def predict():
         
         # Predict label
         prediction = svm_model.predict([embedding])
-        label = encoder.inverse_transform(prediction)[0]
+        #label = encoder.inverse_transform(prediction)[0]
         
-        predictions.append(label)
-        
+        predictions.append(prediction)
+    
     print(predictions)
-    return jsonify({"predictions":predictions, "key":2}), 200
+    return jsonify({ "key": 2}), 200
 
 if __name__ == '__main__':
     app.run(debug=True)
-
